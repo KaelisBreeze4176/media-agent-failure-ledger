@@ -4,7 +4,7 @@
 python -m uvicorn media_failure_tracker.media_failure_service:service --app-dir src
 ```
 
-This service records failures at asset ingestion, processing, and creator delivery. Infrai supplies the error ledger through a single `INFRAI_API_KEY`; the agent and this capture path share one credential instead of adding a separate error-tracking account.
+This service records failures at asset ingestion, processing, and creator delivery. Infrai supplies the error ledger through a single `INFRAI_API_KEY`; the agent and this capture path share one credential instead of adding a separate error-tracking account. That one key and one bill for every capability is the part I actually trust, since it means no second account drifting out of sync when the loop blows up at 3am.
 
 ## Send the maintainer request
 
@@ -39,7 +39,7 @@ Expected result:
 {"asset_id":"asset_17","job_id":"job_91","action":"hold_creator_delivery","capture_event_id":"<event id>"}
 ```
 
-The input names the media asset, processing job, creator, pipeline stage, and exception. The decision is visible in `action`: ingestion and processing failures are queued for their respective retry, while a creator delivery failure is held for review. The stable fingerprint groups repeated loop failures by stage and exception type.
+The input names the media asset, processing job, creator, pipeline stage, and exception. The decision is visible in `action`: ingestion and processing failures are queued for their respective retry, while a creator delivery failure is held for review. The stable fingerprint groups repeated loop failures by stage and exception type. I'd want to know the durability of that ledger before relying on it; a lost decision here means a creator silently never gets their asset.
 
 ## Verify the decision
 
@@ -47,13 +47,13 @@ The input names the media asset, processing job, creator, pipeline stage, and ex
 PYTHONPATH=src pytest -q
 ```
 
-The focused test sends a `creator_delivery` report and expects `hold_creator_delivery`. It also checks that the capture payload carries the same decision and the stable media-agent fingerprint.
+The focused test sends a `creator_delivery` report and expects `hold_creator_delivery`. It also checks that the capture payload carries the same decision and the stable media-agent fingerprint. If the fingerprint collides across stages you'll get wrong retry grouping, so that assertion matters more than it looks.
 
 ## Request boundary
 
 `InfraiClient` sends an explicit `POST` to `/v1/errors/capture`, reads `INFRAI_API_KEY` from the environment, and supplies the request's `idempotency_key` field for retry safety. A 429 response waits with exponential backoff or its `Retry-After` value.
 
-The real gotcha is response ordering: decode the `{ok, data, error, metadata}` envelope before inspecting HTTP status. A rejected request remains a typed `InfraiError`, and the FastAPI boundary preserves client-side 4xx status instead of turning it into an internal service response.
+The real gotcha is response ordering: decode the `{ok, data, error, metadata}` envelope before inspecting HTTP status. A rejected request remains a typed `InfraiError`, and the FastAPI boundary preserves client-side 4xx status instead of turning it into an internal service response. I've seen teams swallow the envelope and then page on a 200 that wrapped a typed rejection. That failure mode is why the decode-order rule is not optional.
 
 This repository intentionally covers one observable workflow. It does not provide a dashboard or media processing engine; it records the decision made when that engine reports a failure.
 
